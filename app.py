@@ -33,12 +33,10 @@ def get_user_data_path(user_id):
     return os.path.join(USER_CHATS_PATH, f"{user_id}_data.json")
 
 def load_user_data(user_id):
-    """Carica l'intero file di dati dell'utente (che contiene tutte le sue chat)."""
     user_data_path = get_user_data_path(user_id)
     if os.path.exists(user_data_path):
         with open(user_data_path, "r") as f:
             return json.load(f)
-    # Se l'utente non ha dati, crea una struttura di default
     return {"chats": {}, "active_chat_id": None}
 
 def save_user_data(user_id):
@@ -52,19 +50,42 @@ def switch_chat(chat_id):
     st.session_state.user_data["active_chat_id"] = chat_id
     active_chat = st.session_state.user_data["chats"][chat_id]
     st.session_state.messages = active_chat["messages"]
-    # Ricostruisce la cronologia per la catena conversazionale
     st.session_state.chat_history_tuples = [(msg["content"], st.session_state.messages[i+1]["content"]) for i, msg in enumerate(st.session_state.messages) if msg["role"] == "user" and i+1 < len(st.session_state.messages)]
 
 def create_new_chat():
     """Crea una nuova chat vuota e la imposta come attiva."""
     chat_id = f"chat_{int(datetime.now().timestamp())}"
-    chat_name = f"Conversazione del {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    chat_name = f"Nuova Conversazione" 
     st.session_state.user_data["chats"][chat_id] = {"name": chat_name, "messages": []}
     switch_chat(chat_id)
 
-# --- FUNZIONI CORE (modificate per usare la chat attiva) ---
+def get_chat_summary(user_message, assistant_message):
+    """Genera un breve riassunto di una conversazione da usare come titolo."""
+    if "conversation" not in st.session_state or not st.session_state.conversation:
+        return None
+    
+    llm = st.session_state.conversation.llm
+    prompt = f"""
+    Basandoti sulla seguente conversazione, crea un titolo molto breve (massimo 5 parole) che ne riassuma l'argomento principale.
+
+    CONVERSAZIONE:
+    Utente: "{user_message}"
+    Assistente: "{assistant_message}"
+
+    TITOLO BREVE:
+    """
+    try:
+        response = llm.invoke(prompt)
+        summary = response.content.strip().replace('"', '')
+        return summary
+    except Exception as e:
+        print(f"Error generating chat summary: {e}")
+        return None
 
 def handle_user_input(user_question):
+    """
+    Gestisce l'input dell'utente, genera una risposta e aggiorna lo stato della chat.
+    """
     if st.session_state.conversation:
         active_chat_id = st.session_state.user_data["active_chat_id"]
         if not active_chat_id:
@@ -87,20 +108,27 @@ def handle_user_input(user_question):
                 if 'slide' in meta: citation_detail += f" (Slide: {meta['slide']})"
                 if citation_detail not in citations: citations.append(citation_detail)
         
-        # Aggiunge il messaggio alla chat attiva
-        st.session_state.user_data["chats"][active_chat_id]["messages"].append({"role": "assistant", "content": answer, "question": user_question, "citations": citations})
-        # Aggiorna la UI
-        st.session_state.messages.append({"role": "assistant", "content": answer, "question": user_question, "citations": citations})
+        assistant_message = {"role": "assistant", "content": answer, "question": user_question, "citations": citations}
+        st.session_state.user_data["chats"][active_chat_id]["messages"].append(assistant_message)
+        st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
         
-        save_user_data(st.session_state.current_user)
+        active_chat = st.session_state.user_data["chats"][active_chat_id]
+        if len(active_chat["messages"]) == 2:
+            new_title = get_chat_summary(user_question, answer)
+            if new_title:
+                st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
 
-# ... [TUTTE LE ALTRE FUNZIONI: check_password, get_documents, etc. RESTANO IDENTICHE] ...
 def get_documents_with_detailed_metadata(uploaded_files):
+    """
+    Processa una lista di file caricati, estraendo anche da archivi.
+    """
     all_documents = []
     for uploaded_file in uploaded_files:
         file_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name)
         with open(file_path, "wb") as f: f.write(uploaded_file.getbuffer())
+        
         file_extension = os.path.splitext(uploaded_file.name)[1]
+
         if file_extension in ['.zip', '.7z']:
             extraction_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name + "_extracted")
             if not os.path.exists(extraction_path): os.makedirs(extraction_path)
@@ -109,6 +137,7 @@ def get_documents_with_detailed_metadata(uploaded_files):
                     with zipfile.ZipFile(file_path, 'r') as zf: zf.extractall(extraction_path)
                 elif file_extension == '.7z':
                     with py7zr.SevenZipFile(file_path, mode='r') as z: z.extractall(path=extraction_path)
+                
                 for root, _, files in os.walk(extraction_path):
                     for file in files:
                         with open(os.path.join(root, file), "rb") as f_in:
@@ -119,12 +148,18 @@ def get_documents_with_detailed_metadata(uploaded_files):
     return all_documents
 
 def process_single_file(file_obj, file_name, archive_name=None):
+    """
+    Estrae testo da un singolo file e aggiunge metadati dettagliati.
+    """
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
+    
     temp_file_path = os.path.join(TEMP_FILES_PATH, file_name)
     if hasattr(file_obj, 'getbuffer'):
         with open(temp_file_path, "wb") as f: f.write(file_obj.getbuffer())
+    
     file_extension = os.path.splitext(file_name)[1]
+    
     try:
         if file_extension == '.pdf':
             loader = PyPDFLoader(temp_file_path)
@@ -152,6 +187,9 @@ def process_single_file(file_obj, file_name, archive_name=None):
     return documents
 
 def check_password():
+    """
+    Mostra una schermata di login e controlla la password.
+    """
     if "password_correct" not in st.session_state: st.session_state.password_correct = False
     if st.session_state.password_correct: return True
     st.title("Accesso Riservato - Consip Advisor")
@@ -165,10 +203,16 @@ def check_password():
     return False
 
 def get_text_chunks(documents):
+    """
+    Suddivide i documenti in frammenti di testo più piccoli.
+    """
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return text_splitter.split_documents(documents)
 
 def get_vector_store(text_chunks):
+    """
+    Crea e salva un database vettoriale (FAISS) dai frammenti di testo.
+    """
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
         vector_store = FAISS.from_documents(text_chunks, embedding=embeddings)
@@ -177,24 +221,31 @@ def get_vector_store(text_chunks):
     except Exception as e: st.error(f"Errore creazione Vector Store: {e}"); return None
 
 def get_conversational_chain(vector_store):
+    """
+    Crea il motore conversazionale AI.
+    """
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.3)
         return ConversationalRetrievalChain.from_llm(llm=llm, retriever=vector_store.as_retriever(), return_source_documents=True)
     except Exception as e: st.error(f"Errore creazione catena conversazionale: {e}"); return None
 
 def save_feedback(feedback_data):
+    """
+    Salva il feedback dell'utente in un file CSV.
+    """
     file_exists = os.path.exists(FEEDBACK_FILE_PATH)
     with open(FEEDBACK_FILE_PATH, 'a', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['timestamp', 'user_id', 'question', 'response', 'rating', 'comment'])
         if not file_exists: writer.writeheader()
         writer.writerow(feedback_data)
 
-# --- INTERFACCIA UTENTE (con logica di cronologia chat) ---
-
 def render_main_app():
+    """
+    Disegna l'interfaccia principale del chatbot.
+    """
     st.title("💡 Consip Advisor")
     
-    # Inizializzazione o caricamento della conversazione
+    # Carica la base di conoscenza se non è già in memoria
     if os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")) and "conversation" not in st.session_state:
         try:
             embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
@@ -202,6 +253,7 @@ def render_main_app():
             st.session_state.conversation = get_conversational_chain(vector_store)
         except Exception as e: st.error(f"Impossibile caricare la base di conoscenza: {e}")
 
+    # Disegna la sidebar
     with st.sidebar:
         st.header(f"Ciao, {st.session_state.user_full_name}")
         if st.button("Logout"):
@@ -210,14 +262,12 @@ def render_main_app():
         
         st.markdown("---")
         
-        # NUOVA SEZIONE CRONOLOGIA
         st.header("Le tue Conversazioni")
         if st.button("➕ Nuova Chat"):
             create_new_chat()
             save_user_data(st.session_state.current_user)
-            # Non serve rerun, switch_chat aggiorna già lo stato
         
-        # Elenca le chat esistenti
+        # Mostra la cronologia delle chat
         chats = st.session_state.user_data.get("chats", {})
         sorted_chats = sorted(chats.items(), key=lambda item: item[0], reverse=True)
         for chat_id, chat_data in sorted_chats:
@@ -227,20 +277,8 @@ def render_main_app():
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
         
-        # --- MODIFICA APPLICATA QUI PER RISOLVERE L'ERRORE DI UPLOAD ---
-        # Aggiunti i MIME type completi per i file Office per garantire la compatibilità
-        # con tutti i browser, risolvendo l'errore di "file not allowed".
-        allowed_types = [
-            'pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx',
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        ]
-        uploaded_files = st.file_uploader(
-            "Carica file o archivi",
-            accept_multiple_files=True,
-            type=allowed_types
-        )
+        allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+        uploaded_files = st.file_uploader("Carica file o archivi", accept_multiple_files=True, type=allowed_types)
 
         if st.button("Processa e Aggiungi"):
             if uploaded_files:
@@ -256,7 +294,7 @@ def render_main_app():
                     else: st.warning("Nessun documento valido trovato.")
             else: st.warning("Per favore, carica almeno un file.")
     
-    # Area di chat principale
+    # Disegna l'area di chat principale
     for i, message in enumerate(st.session_state.get('messages', [])):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -275,26 +313,33 @@ def render_main_app():
                             save_feedback({"timestamp": datetime.now().isoformat(), "user_id": st.session_state.current_user, "question": message.get("question", "N/D"), "response": message["content"], "rating": rating.split(" ")[0], "comment": comment})
                             st.toast("Grazie! Feedback salvato.")
                             
+    # Gestisce l'input dell'utente
     if user_question := st.chat_input("Fai una domanda sui documenti..."):
         active_chat_id = st.session_state.user_data.get("active_chat_id")
         if active_chat_id:
-            st.session_state.user_data["chats"][active_chat_id]["messages"].append({"role": "user", "content": user_question})
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            save_user_data(st.session_state.current_user)
+            user_message = {"role": "user", "content": user_question}
+            st.session_state.user_data["chats"][active_chat_id]["messages"].append(user_message)
+            st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
+            
             with st.chat_message("user"): st.markdown(user_question)
+            
             with st.spinner("Consip Advisor sta pensando..."):
                 handle_user_input(user_question)
-                st.rerun()
+            
+            save_user_data(st.session_state.current_user)
+            st.rerun()
         else:
             st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
 
 # --- BLOCCO PRINCIPALE DI ESECUZIONE ---
 if __name__ == "__main__":
+    # Crea le cartelle necessarie al primo avvio
     for path in [TEMP_FILES_PATH, VECTOR_STORE_PATH, USER_CHATS_PATH]:
         if not os.path.exists(path): os.makedirs(path)
     
+    # Mostra la schermata di login con password
     if check_password():
-        # Se la password è corretta, gestisci l'identificazione dell'utente
+        # Se la password è corretta, gestisce l'identificazione dell'utente
         if not st.session_state.get("current_user"):
              with st.form("user_form"):
                 st.title("Identificati")
@@ -305,10 +350,10 @@ if __name__ == "__main__":
                         user_id = f"{nome.lower().strip()}_{cognome.lower().strip()}"
                         st.session_state.current_user = user_id
                         st.session_state.user_full_name = f"{nome.strip()} {cognome.strip()}"
-                        st.rerun() # Ricarica per passare al blocco successivo
+                        st.rerun()
                     else: st.error("Nome e cognome sono richiesti.")
         else:
-            # L'utente è identificato, ora inizializza i suoi dati se non presenti
+            # Se l'utente è identificato, carica i suoi dati e mostra l'app
             if 'user_data' not in st.session_state:
                 st.session_state.user_data = load_user_data(st.session_state.current_user)
                 if not st.session_state.user_data.get("active_chat_id") or not st.session_state.user_data["chats"]:
@@ -316,5 +361,4 @@ if __name__ == "__main__":
                 else:
                     switch_chat(st.session_state.user_data["active_chat_id"])
             
-            # Infine, mostra l'app principale
             render_main_app()
