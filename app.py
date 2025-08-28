@@ -1,3 +1,17 @@
+# Consip Advisor - Versione con Storicizzazione e Riepilogo Automatico delle Chat
+#
+# DESCRIzione:
+# Questa versione introduce una cronologia completa delle chat con titoli intelligenti.
+# Il titolo di ogni conversazione viene generato da un'AI per riassumerne il contenuto.
+# Il pulsante "Nuova Chat" crea una nuova sessione senza eliminare le precedenti.
+#
+# ISTRUZIONI PER L'ESECUZIONE:
+# 1. Installa le librerie:
+#    pip install streamlit langchain langchain-google-genai google-generativeai pypdf python-docx openpyxl pandas faiss-cpu py7zr python-pptx
+# 2. Incolla la tua Google API Key nella variabile `GOOGLE_API_KEY`.
+# 3. Salva il codice come `app.py` ed eseguilo con:
+#    streamlit run app.py
+
 import streamlit as st
 import os
 import json
@@ -18,9 +32,9 @@ from langchain.docstore.document import Document
 
 # --- CONFIGURAZIONE PRINCIPALE ---
 try:
-    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "AIzaSyDCuewRX1uqYMWrVApGtcRe8v-t5IPxgO0")
+    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "INSERISCI_LA_TUA_API_KEY_QUI")
 except (AttributeError, FileNotFoundError):
-    GOOGLE_API_KEY = "AIzaSyDCuewRX1uqYMWrVApGtcRe8v-t5IPxgO0"
+    GOOGLE_API_KEY = "INSERISCI_LA_TUA_API_KEY_QUI"
 
 VECTOR_STORE_PATH = "vector_store"
 USER_CHATS_PATH = "user_chats"
@@ -33,6 +47,7 @@ def get_user_data_path(user_id):
     return os.path.join(USER_CHATS_PATH, f"{user_id}_data.json")
 
 def load_user_data(user_id):
+    """Carica l'intero file di dati dell'utente (che contiene tutte le sue chat)."""
     user_data_path = get_user_data_path(user_id)
     if os.path.exists(user_data_path):
         with open(user_data_path, "r") as f:
@@ -55,32 +70,37 @@ def switch_chat(chat_id):
 def create_new_chat():
     """Crea una nuova chat vuota e la imposta come attiva."""
     chat_id = f"chat_{int(datetime.now().timestamp())}"
-    chat_name = f"Nuova Conversazione" 
+    chat_name = f"Nuova Conversazione" # Nome temporaneo
     st.session_state.user_data["chats"][chat_id] = {"name": chat_name, "messages": []}
     switch_chat(chat_id)
 
+# --- FUNZIONI CORE (modificate per usare la chat attiva) ---
+
 def get_chat_summary(user_message, assistant_message):
-    """Genera un breve riassunto di una conversazione da usare come titolo."""
-    if "conversation" not in st.session_state or not st.session_state.conversation:
-        return None
-    
-    llm = st.session_state.conversation.llm
-    prompt = f"""
-    Basandoti sulla seguente conversazione, crea un titolo molto breve (massimo 5 parole) che ne riassuma l'argomento principale.
-
-    CONVERSAZIONE:
-    Utente: "{user_message}"
-    Assistente: "{assistant_message}"
-
-    TITOLO BREVE:
+    """
+    Genera un breve riassunto di una conversazione da usare come titolo.
+    Questa funzione ora crea una propria istanza LLM per essere indipendente.
     """
     try:
+        # Crea un'istanza LLM dedicata e leggera solo per questa operazione.
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
+        
+        prompt = f"""
+        Basandoti sulla seguente conversazione, crea un titolo molto breve (massimo 5 parole) che ne riassuma l'argomento principale.
+
+        CONVERSAZIONE:
+        Utente: "{user_message}"
+        Assistente: "{assistant_message}"
+
+        TITOLO BREVE:
+        """
         response = llm.invoke(prompt)
         summary = response.content.strip().replace('"', '')
         return summary
     except Exception as e:
         print(f"Error generating chat summary: {e}")
-        return None
+        # Se la generazione del riassunto fallisce, ritorna un titolo di default
+        return f"Chat del {datetime.now().strftime('%d/%m')}"
 
 def handle_user_input(user_question):
     """
@@ -113,7 +133,7 @@ def handle_user_input(user_question):
         st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
         
         active_chat = st.session_state.user_data["chats"][active_chat_id]
-        if len(active_chat["messages"]) == 2:
+        if len(active_chat["messages"]) == 2: # Se è il primo scambio della chat
             new_title = get_chat_summary(user_question, answer)
             if new_title:
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
@@ -196,7 +216,7 @@ def check_password():
     password = st.text_input("Inserisci la password per accedere", type="password")
     if st.button("Login"):
         try:
-            if password == st.secrets.get("APP_PASSWORD", "CR5DrSFC5wzKE"):
+            if password == st.secrets.get("APP_PASSWORD", "password123"):
                 st.session_state.password_correct = True; st.rerun()
             else: st.error("Password non corretta.")
         except Exception: st.error("Errore configurazione: Password non trovata.")
@@ -238,6 +258,8 @@ def save_feedback(feedback_data):
         writer = csv.DictWriter(f, fieldnames=['timestamp', 'user_id', 'question', 'response', 'rating', 'comment'])
         if not file_exists: writer.writeheader()
         writer.writerow(feedback_data)
+
+# --- INTERFACCIA UTENTE (UI) ---
 
 def render_main_app():
     """
