@@ -6,4 +6,5 @@ pypdf
 python-docx
 openpyxl
 pandas
+py7zr
 faiss-cpu
