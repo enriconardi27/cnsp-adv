@@ -119,7 +119,7 @@ def check_password():
         except Exception: st.error("Errore di configurazione: Password non trovata.")
     return False
 
-ef get_text_chunks(documents):
+def get_text_chunks(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return text_splitter.split_documents(documents)
 
@@ -254,5 +254,6 @@ if __name__ == "__main__":
                     else: st.error("Nome e cognome sono richiesti.")
         else:
             render_main_app()
+
 
 
