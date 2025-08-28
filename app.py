@@ -16,6 +16,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
 
+# --- CONFIGURAZIONE PRINCIPALE ---
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "AIzaSyDCuewRX1uqYMWrVApGtcRe8v-t5IPxgO0")
 except (AttributeError, FileNotFoundError):
@@ -26,6 +27,8 @@ USER_CHATS_PATH = "user_chats"
 TEMP_FILES_PATH = "temp"
 FEEDBACK_FILE_PATH = "feedback_log.csv"
 
+# --- NUOVA GESTIONE DATI UTENTE CON CHAT MULTIPLE ---
+
 def get_user_data_path(user_id):
     return os.path.join(USER_CHATS_PATH, f"{user_id}_data.json")
 
@@ -35,6 +38,7 @@ def load_user_data(user_id):
     if os.path.exists(user_data_path):
         with open(user_data_path, "r") as f:
             return json.load(f)
+    # Se l'utente non ha dati, crea una struttura di default
     return {"chats": {}, "active_chat_id": None}
 
 def save_user_data(user_id):
@@ -48,6 +52,7 @@ def switch_chat(chat_id):
     st.session_state.user_data["active_chat_id"] = chat_id
     active_chat = st.session_state.user_data["chats"][chat_id]
     st.session_state.messages = active_chat["messages"]
+    # Ricostruisce la cronologia per la catena conversazionale
     st.session_state.chat_history_tuples = [(msg["content"], st.session_state.messages[i+1]["content"]) for i, msg in enumerate(st.session_state.messages) if msg["role"] == "user" and i+1 < len(st.session_state.messages)]
 
 def create_new_chat():
@@ -57,6 +62,7 @@ def create_new_chat():
     st.session_state.user_data["chats"][chat_id] = {"name": chat_name, "messages": []}
     switch_chat(chat_id)
 
+# --- FUNZIONI CORE (modificate per usare la chat attiva) ---
 
 def handle_user_input(user_question):
     if st.session_state.conversation:
@@ -88,6 +94,7 @@ def handle_user_input(user_question):
         
         save_user_data(st.session_state.current_user)
 
+# ... [TUTTE LE ALTRE FUNZIONI: check_password, get_documents, etc. RESTANO IDENTICHE] ...
 def get_documents_with_detailed_metadata(uploaded_files):
     all_documents = []
     for uploaded_file in uploaded_files:
@@ -220,6 +227,9 @@ def render_main_app():
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
         
+        # --- MODIFICA APPLICATA QUI PER RISOLVERE L'ERRORE DI UPLOAD ---
+        # Aggiunti i MIME type completi per i file Office per garantire la compatibilità
+        # con tutti i browser, risolvendo l'errore di "file not allowed".
         allowed_types = [
             'pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx',
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -284,6 +294,7 @@ if __name__ == "__main__":
         if not os.path.exists(path): os.makedirs(path)
     
     if check_password():
+        # Se la password è corretta, gestisci l'identificazione dell'utente
         if not st.session_state.get("current_user"):
              with st.form("user_form"):
                 st.title("Identificati")
@@ -294,15 +305,16 @@ if __name__ == "__main__":
                         user_id = f"{nome.lower().strip()}_{cognome.lower().strip()}"
                         st.session_state.current_user = user_id
                         st.session_state.user_full_name = f"{nome.strip()} {cognome.strip()}"
-                        # Carica i dati dell'utente o crea una nuova struttura
-                        st.session_state.user_data = load_user_data(user_id)
-                        # Se non ci sono chat, creane una nuova
-                        if not st.session_state.user_data.get("active_chat_id"):
-                            create_new_chat()
-                        else:
-                            # Altrimenti, carica la chat attiva
-                            switch_chat(st.session_state.user_data["active_chat_id"])
-                        st.rerun()
+                        st.rerun() # Ricarica per passare al blocco successivo
                     else: st.error("Nome e cognome sono richiesti.")
         else:
+            # L'utente è identificato, ora inizializza i suoi dati se non presenti
+            if 'user_data' not in st.session_state:
+                st.session_state.user_data = load_user_data(st.session_state.current_user)
+                if not st.session_state.user_data.get("active_chat_id") or not st.session_state.user_data["chats"]:
+                    create_new_chat()
+                else:
+                    switch_chat(st.session_state.user_data["active_chat_id"])
+            
+            # Infine, mostra l'app principale
             render_main_app()
