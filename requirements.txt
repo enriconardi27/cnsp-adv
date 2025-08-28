@@ -1,0 +1,9 @@
+streamlit
+langchain
+langchain-google-genai
+google-generativeai
+pypdf
+python-docx
+openpyxl
+pandas
+faiss-cpu
