@@ -7,6 +7,8 @@ import pandas as pd
 import docx
 import zipfile
 import py7zr
+import requests
+from bs4 import BeautifulSoup
 from pptx import Presentation
 from datetime import datetime
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
@@ -15,6 +17,7 @@ from langchain.chains.conversational_retrieval.base import ConversationalRetriev
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
+from langchain.prompts import PromptTemplate
 
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "INSERISCI_LA_TUA_API_KEY_QUI")
@@ -426,6 +429,7 @@ if __name__ == "__main__":
                     switch_chat(st.session_state.user_data["active_chat_id"])
             
             render_main_app()
+
 
 
 
