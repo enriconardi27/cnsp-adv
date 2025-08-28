@@ -10,4 +10,5 @@ py7zr
 faiss-cpu
 langchain_community
 python-pptx
-
+beautifulsoup4
+requests
