@@ -16,7 +16,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
 
-# --- CONFIGURAZIONE PRINCIPALE ---
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "INSERISCI_LA_TUA_API_KEY_QUI")
 except (AttributeError, FileNotFoundError):
@@ -27,13 +26,10 @@ USER_CHATS_PATH = "user_chats"
 TEMP_FILES_PATH = "temp"
 FEEDBACK_FILE_PATH = "feedback_log.csv"
 
-# --- NUOVA GESTIONE DATI UTENTE CON CHAT MULTIPLE ---
-
 def get_user_data_path(user_id):
     return os.path.join(USER_CHATS_PATH, f"{user_id}_data.json")
 
 def load_user_data(user_id):
-    """Carica l'intero file di dati dell'utente (che contiene tutte le sue chat)."""
     user_data_path = get_user_data_path(user_id)
     if os.path.exists(user_data_path):
         with open(user_data_path, "r") as f:
@@ -41,34 +37,23 @@ def load_user_data(user_id):
     return {"chats": {}, "active_chat_id": None}
 
 def save_user_data(user_id):
-    """Salva l'intero file di dati dell'utente."""
     if "user_data" in st.session_state:
         with open(get_user_data_path(user_id), "w") as f:
             json.dump(st.session_state.user_data, f)
 
 def switch_chat(chat_id):
-    """Attiva una chat diversa dalla cronologia."""
     st.session_state.user_data["active_chat_id"] = chat_id
     active_chat = st.session_state.user_data["chats"][chat_id]
     st.session_state.messages = active_chat["messages"]
     st.session_state.chat_history_tuples = [(msg["content"], st.session_state.messages[i+1]["content"]) for i, msg in enumerate(st.session_state.messages) if msg["role"] == "user" and i+1 < len(st.session_state.messages)]
 
 def create_new_chat():
-    """Crea una nuova chat vuota e la imposta come attiva."""
     chat_id = f"chat_{int(datetime.now().timestamp())}"
-    chat_name = f"Nuova Conversazione" # Nome temporaneo
+    chat_name = f"Nuova Conversazione"
     st.session_state.user_data["chats"][chat_id] = {"name": chat_name, "messages": []}
     switch_chat(chat_id)
-
-# --- FUNZIONI CORE (modificate per usare la chat attiva) ---
-
 def get_chat_summary(user_message, assistant_message):
-    """
-    Genera un breve riassunto di una conversazione da usare come titolo.
-    Questa funzione ora crea una propria istanza LLM per essere indipendente.
-    """
     try:
-        # Crea un'istanza LLM dedicata e leggera solo per questa operazione.
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
         
         prompt = f"""
@@ -85,7 +70,6 @@ def get_chat_summary(user_message, assistant_message):
         return summary
     except Exception as e:
         print(f"Error generating chat summary: {e}")
-        # Se la generazione del riassunto fallisce, ritorna un titolo di default
         return f"Chat del {datetime.now().strftime('%d/%m')}"
         
 def get_suggestions(user_question, retriever):
@@ -113,9 +97,6 @@ def get_suggestions(user_question, retriever):
         return None
         
 def handle_user_input(user_question):
-    """
-    Gestisce l'input dell'utente, genera una risposta e aggiorna lo stato della chat.
-    """
     if st.session_state.conversation:
         active_chat_id = st.session_state.user_data["active_chat_id"]
         if not active_chat_id:
@@ -132,7 +113,6 @@ def handle_user_input(user_question):
             
             citations = []
         else:
-            # Se ci sono risultati, procede normalmente
             answer = response['answer']
             st.session_state.chat_history_tuples.append((user_question, answer))
             
@@ -158,9 +138,6 @@ def handle_user_input(user_question):
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
 
 def get_documents_with_detailed_metadata(uploaded_files):
-    """
-    Processa una lista di file caricati, estraendo anche da archivi.
-    """
     all_documents = []
     for uploaded_file in uploaded_files:
         file_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name)
@@ -187,9 +164,6 @@ def get_documents_with_detailed_metadata(uploaded_files):
     return all_documents
 
 def process_single_file(file_obj, file_name, archive_name=None):
-    """
-    Estrae testo da un singolo file e aggiunge metadati dettagliati.
-    """
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
     
@@ -226,9 +200,6 @@ def process_single_file(file_obj, file_name, archive_name=None):
     return documents
 
 def check_password():
-    """
-    Mostra una schermata di login e controlla la password.
-    """
     if "password_correct" not in st.session_state: st.session_state.password_correct = False
     if st.session_state.password_correct: return True
     st.title("Accesso Riservato - Consip Advisor")
@@ -242,16 +213,10 @@ def check_password():
     return False
 
 def get_text_chunks(documents):
-    """
-    Suddivide i documenti in frammenti di testo più piccoli.
-    """
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return text_splitter.split_documents(documents)
 
 def get_vector_store(text_chunks):
-    """
-    Crea e salva un database vettoriale (FAISS) dai frammenti di testo.
-    """
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
         vector_store = FAISS.from_documents(text_chunks, embedding=embeddings)
@@ -260,9 +225,7 @@ def get_vector_store(text_chunks):
     except Exception as e: st.error(f"Errore creazione Vector Store: {e}"); return None
 
 def get_conversational_chain(vector_store):
-    """
-    Crea il motore conversazionale AI con un prompt personalizzato.
-    """
+
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.3)
         
@@ -294,15 +257,8 @@ def save_feedback(feedback_data):
         if not file_exists: writer.writeheader()
         writer.writerow(feedback_data)
 
-# --- INTERFACCIA UTENTE (UI) ---
-
 def render_main_app():
-    """
-    Disegna l'interfaccia principale del chatbot.
-    """
     st.title("💡 Consip Advisor")
-    
-    # Carica la base di conoscenza se non è già in memoria
     if os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")) and "conversation" not in st.session_state:
         try:
             embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
@@ -385,7 +341,6 @@ def render_main_app():
             st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
 
 if __name__ == "__main__":
-    # Crea le cartelle necessarie al primo avvio
     for path in [TEMP_FILES_PATH, VECTOR_STORE_PATH, USER_CHATS_PATH]:
         if not os.path.exists(path): os.makedirs(path)
     if check_password():
@@ -410,4 +365,5 @@ if __name__ == "__main__":
                     switch_chat(st.session_state.user_data["active_chat_id"])
             
             render_main_app()
+
 
