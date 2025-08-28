@@ -119,8 +119,8 @@ def check_password():
         except Exception: st.error("Errore di configurazione: Password non trovata.")
     return False
 
-def get_text_chunks(documents):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+ef get_text_chunks(documents):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return text_splitter.split_documents(documents)
 
 def get_vector_store(text_chunks):
@@ -151,6 +151,7 @@ def handle_user_input(user_question):
                 if 'page' in meta: citation_detail += f" (Pagina: {meta['page'] + 1})"
                 if 'row' in meta: citation_detail += f" (Riga: {meta['row']})"
                 if 'paragraph' in meta: citation_detail += f" (Paragrafo: {meta['paragraph']})"
+                if 'slide' in meta: citation_detail += f" (Slide: {meta['slide']})"
                 if citation_detail not in citations: citations.append(citation_detail)
         st.session_state.messages.append({"role": "assistant", "content": answer, "question": user_question, "citations": citations})
         save_chat_history(st.session_state.current_user)
@@ -253,4 +254,5 @@ if __name__ == "__main__":
                     else: st.error("Nome e cognome sono richiesti.")
         else:
             render_main_app()
+
 
