@@ -8,4 +8,5 @@ openpyxl
 pandas
 py7zr
 faiss-cpu
-langchain_community.vectorstores
+langchain_community
+
