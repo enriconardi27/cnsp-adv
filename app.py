@@ -195,6 +195,12 @@ def render_main_app():
             st.rerun()
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
+        allowed_types = [
+            'pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ]
         uploaded_files = st.file_uploader("Carica file o archivi (.zip, .7z)", accept_multiple_files=True, type=['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z'])
         if st.button("Processa e Aggiungi"):
             if uploaded_files:
@@ -254,6 +260,7 @@ if __name__ == "__main__":
                     else: st.error("Nome e cognome sono richiesti.")
         else:
             render_main_app()
+
 
 
 
