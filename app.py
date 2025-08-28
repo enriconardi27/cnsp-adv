@@ -41,6 +41,52 @@ def save_user_data(user_id):
         with open(get_user_data_path(user_id), "w") as f:
             json.dump(st.session_state.user_data, f)
 
+
+def scrape_faq_data():
+    base_url = "https://www.acquistinretepa.it/opencms/opencms/faq.html"
+    page_number = 1
+    scraped_documents = []
+    
+    st.write("Inizio importazione FAQ...")
+    progress_bar = st.progress(0)
+    
+    while True:
+        current_url = f"{base_url}?page={page_number}"
+        
+        try:
+            response = requests.get(current_url)
+            response.raise_for_status() # Controlla se la richiesta ha avuto successo
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            qa_pairs = soup.select("div.row.question")
+            if not qa_pairs:
+                break
+                
+            for pair in qa_pairs:
+                question_tag = pair.find('h3')
+                answer_tag = pair.find('div', class_='testo')
+                
+                if question_tag and answer_tag:
+                    question = question_tag.get_text(strip=True)
+                    answer = answer_tag.get_text(strip=True)
+                    
+                    content = f"Domanda: {question}\nRisposta: {answer}"
+                    metadata = {'source': current_url, 'question': question}
+                    scraped_documents.append(Document(page_content=content, metadata=metadata))
+            
+            st.write(f"Pagina {page_number} importata con successo.")
+            progress_bar.progress(min(page_number / 16, 1.0))
+            page_number += 1
+            
+        except requests.RequestException as e:
+            st.error(f"Errore di rete durante l'accesso alla pagina {page_number}: {e}")
+            break
+            
+    progress_bar.progress(1.0)
+    st.write("Importazione FAQ completata.")
+    return scraped_documents
+
 def switch_chat(chat_id):
     st.session_state.user_data["active_chat_id"] = chat_id
     active_chat = st.session_state.user_data["chats"][chat_id]
@@ -304,6 +350,21 @@ def render_main_app():
                             st.rerun()
                     else: st.warning("Nessun documento valido trovato.")
             else: st.warning("Per favore, carica almeno un file.")
+        
+        st.markdown("---")
+        st.header("Importa da Web")
+        if st.button("Importa FAQ da AcquistinRetePA"):
+            with st.spinner("Importazione dal web in corso... Questa operazione potrebbe richiedere alcuni minuti."):
+                scraped_docs = scrape_faq_data()
+                if scraped_docs:
+                    chunks = get_text_chunks(scraped_docs)
+                    vs = get_vector_store(chunks)
+                    if vs:
+                        st.session_state.conversation = get_conversational_chain(vs)
+                        st.success("FAQ importate e base di conoscenza aggiornata!")
+                        st.rerun()
+                else:
+                    st.error("Nessuna FAQ trovata o errore durante l'importazione.")
     
     for i, message in enumerate(st.session_state.get('messages', [])):
         with st.chat_message(message["role"]):
@@ -365,5 +426,6 @@ if __name__ == "__main__":
                     switch_chat(st.session_state.user_data["active_chat_id"])
             
             render_main_app()
+
 
 
