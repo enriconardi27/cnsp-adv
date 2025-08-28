@@ -14,6 +14,7 @@ from langchain.chains.conversational_retrieval.base import ConversationalRetriev
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
+from pptx import Presentation
 
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "AIzaSyDCuewRX1uqYMWrVApGtcRe8v-t5IPxgO0")
@@ -27,7 +28,6 @@ FEEDBACK_FILE_PATH = "feedback_log.csv"
 
 def get_documents_with_detailed_metadata(uploaded_files):
     all_documents = []
-    
     for uploaded_file in uploaded_files:
         file_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name)
         with open(file_path, "wb") as f:
@@ -37,82 +37,71 @@ def get_documents_with_detailed_metadata(uploaded_files):
 
         if file_extension in ['.zip', '.7z']:
             extraction_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name + "_extracted")
-            if not os.path.exists(extraction_path):
-                os.makedirs(extraction_path)
-
+            if not os.path.exists(extraction_path): os.makedirs(extraction_path)
             try:
                 if file_extension == '.zip':
-                    with zipfile.ZipFile(file_path, 'r') as zf:
-                        zf.extractall(extraction_path)
+                    with zipfile.ZipFile(file_path, 'r') as zf: zf.extractall(extraction_path)
                 elif file_extension == '.7z':
-                    with py7zr.SevenZipFile(file_path, mode='r') as z:
-                        z.extractall(path=extraction_path)
+                    with py7zr.SevenZipFile(file_path, mode='r') as z: z.extractall(path=extraction_path)
                 
                 for root, _, files in os.walk(extraction_path):
                     for file in files:
-                        extracted_file_path = os.path.join(root, file)
-                        with open(extracted_file_path, "rb") as f_in:
+                        with open(os.path.join(root, file), "rb") as f_in:
                             all_documents.extend(process_single_file(f_in, file, uploaded_file.name))
-
             except Exception as e:
                 st.error(f"Errore durante l'estrazione dell'archivio {uploaded_file.name}: {e}")
-
         else:
             all_documents.extend(process_single_file(uploaded_file, uploaded_file.name))
-            
     return all_documents
-
 
 def process_single_file(file_obj, file_name, archive_name=None):
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
+    
     temp_file_path = os.path.join(TEMP_FILES_PATH, file_name)
     if hasattr(file_obj, 'getbuffer'):
-        with open(temp_file_path, "wb") as f:
-            f.write(file_obj.getbuffer())
-    else: 
-        pass
-
-
+        with open(temp_file_path, "wb") as f: f.write(file_obj.getbuffer())
+    
     file_extension = os.path.splitext(file_name)[1]
     
     try:
         if file_extension == '.pdf':
             loader = PyPDFLoader(temp_file_path)
             pages = loader.load_and_split()
-            for page in pages:
-                page.metadata['source'] = source_display
+            for page in pages: page.metadata['source'] = source_display
             documents.extend(pages)
 
         elif file_extension == '.docx':
             doc = docx.Document(temp_file_path)
             for i, p in enumerate(doc.paragraphs):
-                if p.text.strip():
+                if p.text.strip(): documents.append(Document(page_content=p.text, metadata={'source': source_display, 'paragraph': i + 1}))
+
+        elif file_extension == '.pptx':
+            prs = Presentation(temp_file_path)
+            for i, slide in enumerate(prs.slides):
+                slide_text = ""
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        slide_text += shape.text + "\n"
+                if slide_text.strip():
                     documents.append(Document(
-                        page_content=p.text,
-                        metadata={'source': source_display, 'paragraph': i + 1}
+                        page_content=slide_text,
+                        metadata={'source': source_display, 'slide': i + 1}
                     ))
 
         elif file_extension == '.csv':
             df = pd.read_csv(temp_file_path)
             for i, row in df.iterrows():
                 content = ", ".join(f"{col}: {val}" for col, val in row.items())
-                documents.append(Document(
-                    page_content=content,
-                    metadata={'source': source_display, 'row': i + 1}
-                ))
+                documents.append(Document(page_content=content, metadata={'source': source_display, 'row': i + 1}))
 
         elif file_extension == '.xlsx':
             df = pd.read_excel(temp_file_path)
             for i, row in df.iterrows():
                 content = ", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val))
-                documents.append(Document(
-                    page_content=content,
-                    metadata={'source': source_display, 'row': i + 1}
-                ))
+                documents.append(Document(page_content=content, metadata={'source': source_display, 'row': i + 1}))
     except Exception as e:
         st.warning(f"Impossibile processare il file {file_name}: {e}")
-
     return documents
 
 
@@ -264,3 +253,4 @@ if __name__ == "__main__":
                     else: st.error("Nome e cognome sono richiesti.")
         else:
             render_main_app()
+
