@@ -1,17 +1,3 @@
-# Consip Advisor - Versione con Storicizzazione e Riepilogo Automatico delle Chat
-#
-# DESCRIzione:
-# Questa versione introduce una cronologia completa delle chat con titoli intelligenti.
-# Il titolo di ogni conversazione viene generato da un'AI per riassumerne il contenuto.
-# Il pulsante "Nuova Chat" crea una nuova sessione senza eliminare le precedenti.
-#
-# ISTRUZIONI PER L'ESECUZIONE:
-# 1. Installa le librerie:
-#    pip install streamlit langchain langchain-google-genai google-generativeai pypdf python-docx openpyxl pandas faiss-cpu py7zr python-pptx
-# 2. Incolla la tua Google API Key nella variabile `GOOGLE_API_KEY`.
-# 3. Salva il codice come `app.py` ed eseguilo con:
-#    streamlit run app.py
-
 import streamlit as st
 import os
 import json
@@ -101,7 +87,31 @@ def get_chat_summary(user_message, assistant_message):
         print(f"Error generating chat summary: {e}")
         # Se la generazione del riassunto fallisce, ritorna un titolo di default
         return f"Chat del {datetime.now().strftime('%d/%m')}"
+        
+def get_suggestions(user_question, retriever):
+    try:
+        similar_docs = retriever.get_relevant_documents(user_question)
+        if not similar_docs:
+            return None
 
+        context = "\n\n".join([doc.page_content for doc in similar_docs])
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
+        suggestion_prompt = f"""
+        Un utente ha cercato "{user_question}" ma non ha trovato una risposta diretta.
+        Basandoti sul seguente contesto estratto dai documenti, suggerisci 3 argomenti o termini di ricerca alternativi e pertinenti.
+        Rispondi solo con una lista puntata di suggerimenti in italiano.
+
+        Contesto:
+        {context}
+
+        Suggerimenti:
+        """
+        response = llm.invoke(suggestion_prompt)
+        return response.content
+    except Exception as e:
+        print(f"Error generating suggestions: {e}")
+        return None
+        
 def handle_user_input(user_question):
     """
     Gestisce l'input dell'utente, genera una risposta e aggiorna lo stato della chat.
@@ -113,11 +123,20 @@ def handle_user_input(user_question):
             return
 
         response = st.session_state.conversation({'question': user_question, 'chat_history': st.session_state.get('chat_history_tuples', [])})
-        answer = response['answer']
-        st.session_state.chat_history_tuples.append((user_question, answer))
-        
-        citations = []
-        if response['source_documents']:
+        if not response['source_documents']:
+            suggestions = get_suggestions(user_question, st.session_state.conversation.retriever)
+            if suggestions:
+                answer = f"Non ho trovato risultati diretti per '{user_question}'.\n\nForse cercavi:\n{suggestions}"
+            else:
+                answer = f"Mi dispiace, non ho trovato alcuna informazione relativa a '{user_question}' nei documenti a mia disposizione."
+            
+            citations = []
+        else:
+            # Se ci sono risultati, procede normalmente
+            answer = response['answer']
+            st.session_state.chat_history_tuples.append((user_question, answer))
+            
+            citations = []
             for doc in response['source_documents']:
                 meta = doc.metadata
                 source = meta.get('source', 'N/D')
@@ -133,7 +152,7 @@ def handle_user_input(user_question):
         st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
         
         active_chat = st.session_state.user_data["chats"][active_chat_id]
-        if len(active_chat["messages"]) == 2: # Se è il primo scambio della chat
+        if len(active_chat["messages"]) == 2:
             new_title = get_chat_summary(user_question, answer)
             if new_title:
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
@@ -242,17 +261,33 @@ def get_vector_store(text_chunks):
 
 def get_conversational_chain(vector_store):
     """
-    Crea il motore conversazionale AI.
+    Crea il motore conversazionale AI con un prompt personalizzato.
     """
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOOGLE_API_KEY, temperature=0.3)
-        return ConversationalRetrievalChain.from_llm(llm=llm, retriever=vector_store.as_retriever(), return_source_documents=True)
+        
+        template = """
+        Sei un assistente chiamato Consip Advisor. Il tuo compito è rispondere alle domande basandoti esclusivamente sul contesto fornito.
+        Rispondi sempre e solo in italiano. Se non conosci la risposta dal contesto, di' "Mi dispiace, non ho trovato informazioni a riguardo nei documenti.".
+        Non inventare informazioni.
+
+        Contesto: {context}
+        Cronologia Chat: {chat_history}
+        Domanda: {question}
+        Risposta:
+        """
+        prompt = PromptTemplate(template=template, input_variables=["context", "chat_history", "question"])
+
+        chain = ConversationalRetrievalChain.from_llm(
+            llm=llm, 
+            retriever=vector_store.as_retriever(), 
+            return_source_documents=True,
+            combine_docs_chain_kwargs={"prompt": prompt}
+        )
+        return chain
     except Exception as e: st.error(f"Errore creazione catena conversazionale: {e}"); return None
 
 def save_feedback(feedback_data):
-    """
-    Salva il feedback dell'utente in un file CSV.
-    """
     file_exists = os.path.exists(FEEDBACK_FILE_PATH)
     with open(FEEDBACK_FILE_PATH, 'a', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['timestamp', 'user_id', 'question', 'response', 'rating', 'comment'])
@@ -275,7 +310,6 @@ def render_main_app():
             st.session_state.conversation = get_conversational_chain(vector_store)
         except Exception as e: st.error(f"Impossibile caricare la base di conoscenza: {e}")
 
-    # Disegna la sidebar
     with st.sidebar:
         st.header(f"Ciao, {st.session_state.user_full_name}")
         if st.button("Logout"):
@@ -289,7 +323,6 @@ def render_main_app():
             create_new_chat()
             save_user_data(st.session_state.current_user)
         
-        # Mostra la cronologia delle chat
         chats = st.session_state.user_data.get("chats", {})
         sorted_chats = sorted(chats.items(), key=lambda item: item[0], reverse=True)
         for chat_id, chat_data in sorted_chats:
@@ -316,7 +349,6 @@ def render_main_app():
                     else: st.warning("Nessun documento valido trovato.")
             else: st.warning("Per favore, carica almeno un file.")
     
-    # Disegna l'area di chat principale
     for i, message in enumerate(st.session_state.get('messages', [])):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -335,7 +367,6 @@ def render_main_app():
                             save_feedback({"timestamp": datetime.now().isoformat(), "user_id": st.session_state.current_user, "question": message.get("question", "N/D"), "response": message["content"], "rating": rating.split(" ")[0], "comment": comment})
                             st.toast("Grazie! Feedback salvato.")
                             
-    # Gestisce l'input dell'utente
     if user_question := st.chat_input("Fai una domanda sui documenti..."):
         active_chat_id = st.session_state.user_data.get("active_chat_id")
         if active_chat_id:
@@ -353,15 +384,11 @@ def render_main_app():
         else:
             st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
 
-# --- BLOCCO PRINCIPALE DI ESECUZIONE ---
 if __name__ == "__main__":
     # Crea le cartelle necessarie al primo avvio
     for path in [TEMP_FILES_PATH, VECTOR_STORE_PATH, USER_CHATS_PATH]:
         if not os.path.exists(path): os.makedirs(path)
-    
-    # Mostra la schermata di login con password
     if check_password():
-        # Se la password è corretta, gestisce l'identificazione dell'utente
         if not st.session_state.get("current_user"):
              with st.form("user_form"):
                 st.title("Identificati")
@@ -375,7 +402,6 @@ if __name__ == "__main__":
                         st.rerun()
                     else: st.error("Nome e cognome sono richiesti.")
         else:
-            # Se l'utente è identificato, carica i suoi dati e mostra l'app
             if 'user_data' not in st.session_state:
                 st.session_state.user_data = load_user_data(st.session_state.current_user)
                 if not st.session_state.user_data.get("active_chat_id") or not st.session_state.user_data["chats"]:
@@ -384,3 +410,4 @@ if __name__ == "__main__":
                     switch_chat(st.session_state.user_data["active_chat_id"])
             
             render_main_app()
+
