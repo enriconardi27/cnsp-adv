@@ -20,11 +20,15 @@ from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
 from langchain.prompts import PromptTemplate
 
+# --- CONFIGURAZIONE INIZIALE E COSTANTI ---
+
+# Caricamento sicuro della chiave API di Google
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "INSERISCI_LA_TUA_API_KEY_QUI")
 except (AttributeError, FileNotFoundError):
     GOOGLE_API_KEY = "INSERISCI_LA_TUA_API_KEY_QUI"
 
+# Definizione dei percorsi
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_PATH = os.path.join(BASE_DIR, "vector_store")
 USER_DATA_PATH = os.path.join(BASE_DIR, "user_data")
@@ -33,30 +37,41 @@ FEEDBACK_FILE_PATH = os.path.join(BASE_DIR, "feedback_log.csv")
 USERS_FILE_PATH = os.path.join(BASE_DIR, "users.json")
 
 
+# --- GESTIONE UTENTI E AUTENTICAZIONE SICURA ---
+
 def load_users():
+    """Carica il database degli utenti dal file JSON."""
     if not os.path.exists(USERS_FILE_PATH):
         return {}
     with open(USERS_FILE_PATH, "r") as f:
         return json.load(f)
 
 def save_users(users_data):
+    """Salva il database degli utenti nel file JSON."""
     with open(USERS_FILE_PATH, "w") as f:
         json.dump(users_data, f, indent=4)
 
 def hash_password(password):
+    """Genera l'hash di una password usando bcrypt."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(stored_password, provided_password):
+    """Verifica se la password fornita corrisponde all'hash memorizzato."""
     return bcrypt.checkpw(provided_password.encode('utf-8'), stored_password.encode('utf-8'))
 
+# --- NUOVA GESTIONE DATI UTENTE E CHAT ---
+
 def get_user_dir(username):
+    """Restituisce il percorso della directory di un utente specifico."""
     return os.path.join(USER_DATA_PATH, username)
 
 def get_user_chat_file_path(username, chat_id):
+    """Restituisce il percorso di un file di chat specifico."""
     user_dir = get_user_dir(username)
     return os.path.join(user_dir, "chats", f"{chat_id}.json")
 
 def load_user_data(username):
+    """Carica i dati di un utente, leggendo ogni chat da file separati."""
     user_dir = get_user_dir(username)
     chats_dir = os.path.join(user_dir, "chats")
     
@@ -71,6 +86,7 @@ def load_user_data(username):
             with open(os.path.join(chats_dir, filename), "r") as f:
                 user_data["chats"][chat_id] = json.load(f)
 
+    # Trova la chat più recente per impostarla come attiva
     if user_data["chats"]:
         latest_chat_id = max(user_data["chats"].keys())
         user_data["active_chat_id"] = latest_chat_id
@@ -93,6 +109,7 @@ def save_active_chat(username):
                 json.dump(active_chat_data, f)
 
 def scrape_faq_data():
+    """Esegue lo scraping delle FAQ dal sito AcquistinRetePA."""
     base_url = "https://www.acquistinretepa.it/opencms/opencms/faq.html"
     page_number = 1
     scraped_documents = []
@@ -150,6 +167,7 @@ def create_new_chat():
     switch_chat(chat_id)
     
 def get_chat_summary(user_message, assistant_message):
+    """Genera un titolo breve per la chat utilizzando un LLM."""
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
         prompt = f"""
@@ -169,7 +187,6 @@ def get_chat_summary(user_message, assistant_message):
         return f"Chat del {datetime.now().strftime('%d/%m')}"
 
 def get_suggestions(user_question, retriever):
-    """Genera suggerimenti di ricerca alternativi se non vengono trovati risultati."""
     try:
         similar_docs = retriever.get_relevant_documents(user_question)
         if not similar_docs:
@@ -295,6 +312,13 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
         elif file_extension == '.xlsx':
             df = pd.read_excel(temp_file_path)
             for i, row in df.iterrows(): documents.append(Document(page_content=", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val)), metadata={'source': source_display, 'row': i + 1}))
+        elif file_extension == '.aspx':
+            with open(temp_file_path, "r", encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            soup = BeautifulSoup(content, 'html.parser')
+            text = soup.get_text(separator="\n", strip=True)
+            if text:
+                documents.append(Document(page_content=text, metadata={'source': source_display}))
     except Exception as e: st.warning(f"Impossibile processare {file_name}: {e}")
     return documents
 
@@ -399,10 +423,12 @@ def register_page():
                 st.success("Registrazione completata! Ora puoi effettuare il login.")
 
 def render_main_app():
-    st.title("Consip Advisor")
+    st.title("💡 Consip Advisor")
     
-    # Caricamento della base di conoscenza all'avvio
-    if os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")) and "conversation" not in st.session_state:
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+
+    if st.session_state.conversation is None and os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")):
         try:
             embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
             vector_store = FAISS.load_local(VECTOR_STORE_PATH, embeddings, allow_dangerous_deserialization=True)
@@ -432,7 +458,7 @@ def render_main_app():
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
         
-        allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx']
+        allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'aspx']
         uploaded_files = st.file_uploader("Carica file o archivi", accept_multiple_files=True, type=allowed_types)
 
         if st.button("Processa e Aggiungi"):
@@ -473,7 +499,7 @@ def render_main_app():
                     with st.expander("Mostra fonti consultate"):
                         for citation in citations: st.markdown(f"- {citation}")
 
-                with st.popover(" Fornisci un Feedback"):
+                with st.popover("✏️ Fornisci un Feedback"):
                     with st.form(key=f"feedback_form_{i}"):
                         rating = st.radio("Valutazione:", ("Positivo 👍", "Negativo 👎"), horizontal=True)
                         comment = st.text_area("Commento per migliorare:", height=100)
@@ -489,27 +515,27 @@ def render_main_app():
                             st.toast("Grazie! Feedback salvato.")
                             
     if user_question := st.chat_input("Fai una domanda sui documenti..."):
-        active_chat_id = st.session_state.user_data.get("active_chat_id")
-        if active_chat_id:
-            user_message = {"role": "user", "content": user_question}
-            st.session_state.user_data["chats"][active_chat_id]["messages"].append(user_message)
-            st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
-            
-            with st.chat_message("user"): st.markdown(user_question)
-            
-            with st.spinner("Consip Advisor sta pensando..."):
-                handle_user_input(user_question)
-            
-            save_active_chat(st.session_state.current_user)
-            st.rerun()
+        if st.session_state.conversation is None:
+            st.warning("La base di conoscenza è vuota. Per favore, carica dei documenti o importa le FAQ per iniziare a chattare.")
         else:
-            st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
-
+            active_chat_id = st.session_state.user_data.get("active_chat_id")
+            if active_chat_id:
+                user_message = {"role": "user", "content": user_question}
+                st.session_state.user_data["chats"][active_chat_id]["messages"].append(user_message)
+                st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
+                
+                with st.chat_message("user"): st.markdown(user_question)
+                
+                with st.spinner("Consip Advisor sta pensando..."):
+                    handle_user_input(user_question)
+                
+                save_active_chat(st.session_state.current_user)
+                st.rerun()
+            else:
+                st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
 
 if __name__ == "__main__":
     st.set_page_config(page_title="Consip Advisor", layout="wide")
-
-    # Creazione delle directory necessarie all'avvio
     for path in [TEMP_FILES_PATH, VECTOR_STORE_PATH, USER_DATA_PATH]:
         if not os.path.exists(path): os.makedirs(path)
 
