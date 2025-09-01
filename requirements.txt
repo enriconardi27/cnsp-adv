@@ -8,7 +8,9 @@ openpyxl
 pandas
 py7zr
 faiss-cpu
+bcrypt
 langchain_community
 python-pptx
 beautifulsoup4
 requests
+
