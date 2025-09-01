@@ -20,15 +20,11 @@ from langchain.document_loaders import PyPDFLoader
 from langchain.docstore.document import Document
 from langchain.prompts import PromptTemplate
 
-# --- CONFIGURAZIONE INIZIALE E COSTANTI ---
-
-# Caricamento sicuro della chiave API di Google
 try:
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "INSERISCI_LA_TUA_API_KEY_QUI")
 except (AttributeError, FileNotFoundError):
     GOOGLE_API_KEY = "INSERISCI_LA_TUA_API_KEY_QUI"
 
-# Definizione dei percorsi
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_PATH = os.path.join(BASE_DIR, "vector_store")
 USER_DATA_PATH = os.path.join(BASE_DIR, "user_data")
@@ -36,42 +32,30 @@ TEMP_FILES_PATH = os.path.join(BASE_DIR, "temp")
 FEEDBACK_FILE_PATH = os.path.join(BASE_DIR, "feedback_log.csv")
 USERS_FILE_PATH = os.path.join(BASE_DIR, "users.json")
 
-
-# --- GESTIONE UTENTI E AUTENTICAZIONE SICURA ---
-
 def load_users():
-    """Carica il database degli utenti dal file JSON."""
     if not os.path.exists(USERS_FILE_PATH):
         return {}
     with open(USERS_FILE_PATH, "r") as f:
         return json.load(f)
 
 def save_users(users_data):
-    """Salva il database degli utenti nel file JSON."""
     with open(USERS_FILE_PATH, "w") as f:
         json.dump(users_data, f, indent=4)
 
 def hash_password(password):
-    """Genera l'hash di una password usando bcrypt."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(stored_password, provided_password):
-    """Verifica se la password fornita corrisponde all'hash memorizzato."""
     return bcrypt.checkpw(provided_password.encode('utf-8'), stored_password.encode('utf-8'))
 
-# --- NUOVA GESTIONE DATI UTENTE E CHAT ---
-
 def get_user_dir(username):
-    """Restituisce il percorso della directory di un utente specifico."""
     return os.path.join(USER_DATA_PATH, username)
 
 def get_user_chat_file_path(username, chat_id):
-    """Restituisce il percorso di un file di chat specifico."""
     user_dir = get_user_dir(username)
     return os.path.join(user_dir, "chats", f"{chat_id}.json")
 
 def load_user_data(username):
-    """Carica i dati di un utente, leggendo ogni chat da file separati."""
     user_dir = get_user_dir(username)
     chats_dir = os.path.join(user_dir, "chats")
     
@@ -86,7 +70,6 @@ def load_user_data(username):
             with open(os.path.join(chats_dir, filename), "r") as f:
                 user_data["chats"][chat_id] = json.load(f)
 
-    # Trova la chat più recente per impostarla come attiva
     if user_data["chats"]:
         latest_chat_id = max(user_data["chats"].keys())
         user_data["active_chat_id"] = latest_chat_id
@@ -96,7 +79,6 @@ def load_user_data(username):
     return user_data
 
 def save_active_chat(username):
-    """Salva solo la chat attiva corrente in un file JSON dedicato."""
     if "user_data" in st.session_state and "active_chat_id" in st.session_state.user_data:
         active_chat_id = st.session_state.user_data["active_chat_id"]
         if active_chat_id:
@@ -109,7 +91,6 @@ def save_active_chat(username):
                 json.dump(active_chat_data, f)
 
 def scrape_faq_data():
-    """Esegue lo scraping delle FAQ dal sito AcquistinRetePA."""
     base_url = "https://www.acquistinretepa.it/opencms/opencms/faq.html"
     page_number = 1
     scraped_documents = []
@@ -139,7 +120,7 @@ def scrape_faq_data():
                     scraped_documents.append(Document(page_content=content, metadata=metadata))
             
             st.write(f"Pagina {page_number} importata con successo.")
-            progress_bar.progress(min(page_number / 16, 1.0)) # Stima di 16 pagine
+            progress_bar.progress(min(page_number / 16, 1.0))
             page_number += 1
             
         except requests.RequestException as e:
@@ -167,7 +148,6 @@ def create_new_chat():
     switch_chat(chat_id)
     
 def get_chat_summary(user_message, assistant_message):
-    """Genera un titolo breve per la chat utilizzando un LLM."""
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
         prompt = f"""
@@ -231,22 +211,30 @@ def handle_user_input(user_question):
             st.session_state.chat_history_tuples.append((user_question, answer))
             
             citations = []
+            seen_content = set()
             for doc in response['source_documents']:
-                meta = doc.metadata
-                source = meta.get('source', 'N/D')
-                citation_detail = f"**{source}**"
-                if 'page' in meta: citation_detail += f" (Pagina: {meta['page'] + 1})"
-                if 'row' in meta: citation_detail += f" (Riga: {meta['row']})"
-                if 'paragraph' in meta: citation_detail += f" (Paragrafo: {meta['paragraph']})"
-                if 'slide' in meta: citation_detail += f" (Slide: {meta['slide']})"
-                if citation_detail not in citations: citations.append(citation_detail)
+                if doc.page_content not in seen_content:
+                    meta = doc.metadata
+                    source = meta.get('source', 'N/D')
+                    
+                    citation_detail = f"**{source}**"
+                    if 'page' in meta: citation_detail += f" (Pagina: {meta['page'] + 1})"
+                    if 'row' in meta: citation_detail += f" (Riga: {meta['row']})"
+                    if 'paragraph' in meta: citation_detail += f" (Paragrafo: {meta['paragraph']})"
+                    if 'slide' in meta: citation_detail += f" (Slide: {meta['slide']})"
+                    
+                    citations.append({
+                        "source_info": citation_detail,
+                        "content": doc.page_content
+                    })
+                    seen_content.add(doc.page_content)
         
         assistant_message = {"role": "assistant", "content": answer, "question": user_question, "citations": citations}
         st.session_state.user_data["chats"][active_chat_id]["messages"].append(assistant_message)
         st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
         
         active_chat = st.session_state.user_data["chats"][active_chat_id]
-        if len(active_chat["messages"]) == 2: # Se è il primo scambio della chat
+        if len(active_chat["messages"]) == 2:
             new_title = get_chat_summary(user_question, answer)
             if new_title:
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
@@ -272,7 +260,6 @@ def get_documents_with_detailed_metadata(uploaded_files):
                     for file in files:
                         full_file_path = os.path.join(root, file)
                         with open(full_file_path, "rb") as f_in:
-                            # Passiamo il percorso completo per process_single_file
                             all_documents.extend(process_single_file(full_file_path, file, uploaded_file.name))
             except Exception as e: st.error(f"Errore estrazione archivio {uploaded_file.name}: {e}")
         else:
@@ -336,10 +323,8 @@ def get_vector_store(text_chunks):
 
 def get_conversational_chain(vector_store):
     try:
-        # Modello aggiornato a gemini-1.5-pro per risposte più elaborate
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=GOOGLE_API_KEY, temperature=0.5)
         
-        # Prompt migliorato per un'interazione più discorsiva e naturale
         template = """
         Sei 'Consip Advisor', un assistente AI amichevole, professionale e colloquiale. 
         Il tuo obiettivo primario è assistere gli utenti rispondendo alle loro domande in modo chiaro e utile, basandoti sulle informazioni trovate nel contesto fornito.
@@ -447,7 +432,7 @@ def render_main_app():
         st.header("Le tue Conversazioni")
         if st.button("➕ Nuova Chat"):
             create_new_chat()
-            save_active_chat(st.session_state.current_user) # Salva la nuova chat vuota
+            save_active_chat(st.session_state.current_user)
         
         chats = st.session_state.user_data.get("chats", {})
         sorted_chats = sorted(chats.items(), key=lambda item: item[0], reverse=True)
@@ -496,8 +481,10 @@ def render_main_app():
             if message["role"] == "assistant":
                 citations = message.get("citations", [])
                 if citations:
-                    with st.expander("Mostra fonti consultate"):
-                        for citation in citations: st.markdown(f"- {citation}")
+                    with st.expander("Mostra fonti e citazioni"):
+                        for citation in citations:
+                            st.markdown(citation['source_info'])
+                            st.info(citation['content'])
 
                 with st.popover("✏️ Fornisci un Feedback"):
                     with st.form(key=f"feedback_form_{i}"):
@@ -552,4 +539,3 @@ if __name__ == "__main__":
                 switch_chat(active_id)
         
         render_main_app()
-
