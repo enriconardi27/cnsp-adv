@@ -93,7 +93,6 @@ def save_active_chat(username):
                 json.dump(active_chat_data, f)
 
 def scrape_faq_data():
-    """Esegue lo scraping delle FAQ dal sito AcquistinRetePA."""
     base_url = "https://www.acquistinretepa.it/opencms/opencms/faq.html"
     page_number = 1
     scraped_documents = []
@@ -195,7 +194,6 @@ def get_suggestions(user_question, retriever):
         return None
 
 def handle_user_input(user_question):
-    """Gestisce l'input dell'utente, interroga il RAG e aggiorna la chat."""
     if st.session_state.conversation:
         active_chat_id = st.session_state.user_data["active_chat_id"]
         if not active_chat_id:
@@ -265,13 +263,11 @@ def get_documents_with_detailed_metadata(uploaded_files):
     return all_documents
 
 def process_single_file(file_path_or_obj, file_name, archive_name=None):
-    """Processa un singolo file (PDF, DOCX, etc.) e ne estrae il contenuto."""
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
     
     file_extension = os.path.splitext(file_name)[1].lower()
     
-    # Se l'oggetto è un percorso, usalo direttamente, altrimenti salvalo temporaneamente
     temp_file_path = file_path_or_obj if isinstance(file_path_or_obj, str) else os.path.join(TEMP_FILES_PATH, file_name)
     if not isinstance(file_path_or_obj, str) and hasattr(file_path_or_obj, 'getbuffer'):
          with open(temp_file_path, "wb") as f: f.write(file_path_or_obj.getbuffer())
@@ -303,12 +299,10 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
     return documents
 
 def get_text_chunks(documents):
-    """Divide i documenti in chunk più piccoli."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     return text_splitter.split_documents(documents)
 
 def get_vector_store(text_chunks):
-    """Crea e salva il vector store FAISS dagli embedding dei chunk."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
         vector_store = FAISS.from_documents(text_chunks, embedding=embeddings)
@@ -317,7 +311,6 @@ def get_vector_store(text_chunks):
     except Exception as e: st.error(f"Errore creazione Vector Store: {e}"); return None
 
 def get_conversational_chain(vector_store):
-    """Crea la catena conversazionale con il modello AI e il prompt migliorato."""
     try:
         # Modello aggiornato a gemini-1.5-pro per risposte più elaborate
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=GOOGLE_API_KEY, temperature=0.5)
@@ -351,17 +344,13 @@ def get_conversational_chain(vector_store):
     except Exception as e: st.error(f"Errore creazione catena conversazionale: {e}"); return None
 
 def save_feedback(feedback_data):
-    """Salva il feedback dell'utente in un file CSV."""
     file_exists = os.path.exists(FEEDBACK_FILE_PATH)
     with open(FEEDBACK_FILE_PATH, 'a', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['timestamp', 'username', 'question', 'response', 'rating', 'comment'])
         if not file_exists: writer.writeheader()
         writer.writerow(feedback_data)
 
-# --- INTERFACCIA UTENTE (UI) ---
-
 def show_login_or_register():
-    """Mostra le opzioni di login e registrazione nella sidebar."""
     st.sidebar.title("Accesso Riservato")
     choice = st.sidebar.radio("Scegli un'opzione", ["Login", "Registrati"])
 
@@ -372,7 +361,6 @@ def show_login_or_register():
     return False
 
 def login_page():
-    """Pagina di Login."""
     st.header("Login")
     with st.form("login_form"):
         username = st.text_input("Username").lower()
@@ -390,7 +378,6 @@ def login_page():
                 st.error("Username o password non corretti.")
 
 def register_page():
-    """Pagina di Registrazione."""
     st.header("Crea un nuovo account")
     with st.form("register_form"):
         username = st.text_input("Scegli un Username").lower()
@@ -412,8 +399,7 @@ def register_page():
                 st.success("Registrazione completata! Ora puoi effettuare il login.")
 
 def render_main_app():
-    """Renderizza l'interfaccia principale dell'applicazione dopo il login."""
-    st.title("💡 Consip Advisor")
+    st.title("Consip Advisor")
     
     # Caricamento della base di conoscenza all'avvio
     if os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")) and "conversation" not in st.session_state:
@@ -478,7 +464,6 @@ def render_main_app():
                 else:
                     st.error("Nessuna FAQ trovata o errore durante l'importazione.")
     
-    # Visualizzazione della chat attiva
     for i, message in enumerate(st.session_state.get('messages', [])):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -488,7 +473,7 @@ def render_main_app():
                     with st.expander("Mostra fonti consultate"):
                         for citation in citations: st.markdown(f"- {citation}")
 
-                with st.popover("✏️ Fornisci un Feedback"):
+                with st.popover(" Fornisci un Feedback"):
                     with st.form(key=f"feedback_form_{i}"):
                         rating = st.radio("Valutazione:", ("Positivo 👍", "Negativo 👎"), horizontal=True)
                         comment = st.text_area("Commento per migliorare:", height=100)
@@ -520,7 +505,6 @@ def render_main_app():
         else:
             st.warning("Per favore, crea una 'Nuova Chat' per iniziare.")
 
-# --- PUNTO DI INGRESSO PRINCIPALE ---
 
 if __name__ == "__main__":
     st.set_page_config(page_title="Consip Advisor", layout="wide")
@@ -532,7 +516,6 @@ if __name__ == "__main__":
     if not st.session_state.get("logged_in"):
         show_login_or_register()
     else:
-        # Carica i dati dell'utente solo dopo un login успешный
         if 'user_data' not in st.session_state:
             st.session_state.user_data = load_user_data(st.session_state.current_user)
             active_id = st.session_state.user_data.get("active_chat_id")
@@ -543,3 +526,4 @@ if __name__ == "__main__":
                 switch_chat(active_id)
         
         render_main_app()
+
