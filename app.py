@@ -58,7 +58,7 @@ def get_user_chat_file_path(username, chat_id):
 def load_user_data(username):
     user_dir = get_user_dir(username)
     chats_dir = os.path.join(user_dir, "chats")
-    
+
     if not os.path.exists(chats_dir):
         os.makedirs(chats_dir)
         return {"chats": {}, "active_chat_id": None}
@@ -75,7 +75,7 @@ def load_user_data(username):
         user_data["active_chat_id"] = latest_chat_id
     else:
         user_data["active_chat_id"] = None
-        
+
     return user_data
 
 def save_active_chat(username):
@@ -84,9 +84,9 @@ def save_active_chat(username):
         if active_chat_id:
             active_chat_data = st.session_state.user_data["chats"][active_chat_id]
             chat_file_path = get_user_chat_file_path(username, active_chat_id)
-            
+
             os.makedirs(os.path.dirname(chat_file_path), exist_ok=True)
-            
+
             with open(chat_file_path, "w") as f:
                 json.dump(active_chat_data, f)
 
@@ -94,21 +94,21 @@ def scrape_faq_data():
     base_url = "https://www.acquistinretepa.it/opencms/opencms/faq.html"
     page_number = 1
     scraped_documents = []
-    
+
     st.write("Inizio importazione FAQ...")
     progress_bar = st.progress(0)
-    
+
     while True:
         current_url = f"{base_url}?page={page_number}"
         try:
             response = requests.get(current_url)
             response.raise_for_status()
-            
+
             soup = BeautifulSoup(response.content, 'html.parser')
             qa_pairs = soup.select("div.row.question")
             if not qa_pairs:
                 break
-                
+
             for pair in qa_pairs:
                 question_tag = pair.find('h3')
                 answer_tag = pair.find('div', class_='testo')
@@ -118,15 +118,15 @@ def scrape_faq_data():
                     content = f"Domanda: {question}\nRisposta: {answer}"
                     metadata = {'source': current_url, 'question': question}
                     scraped_documents.append(Document(page_content=content, metadata=metadata))
-            
+
             st.write(f"Pagina {page_number} importata con successo.")
             progress_bar.progress(min(page_number / 16, 1.0))
             page_number += 1
-            
+
         except requests.RequestException as e:
             st.error(f"Errore di rete durante l'accesso alla pagina {page_number}: {e}")
             break
-            
+
     progress_bar.progress(1.0)
     st.write("Importazione FAQ completata.")
     return scraped_documents
@@ -136,8 +136,8 @@ def switch_chat(chat_id):
     active_chat = st.session_state.user_data["chats"][chat_id]
     st.session_state.messages = active_chat["messages"]
     st.session_state.chat_history_tuples = [
-        (msg["content"], st.session_state.messages[i+1]["content"]) 
-        for i, msg in enumerate(st.session_state.messages) 
+        (msg["content"], st.session_state.messages[i+1]["content"])
+        for i, msg in enumerate(st.session_state.messages)
         if msg["role"] == "user" and i+1 < len(st.session_state.messages)
     ]
 
@@ -146,7 +146,7 @@ def create_new_chat():
     chat_name = f"Chat del {datetime.now().strftime('%d/%m %H:%M')}"
     st.session_state.user_data["chats"][chat_id] = {"name": chat_name, "messages": []}
     switch_chat(chat_id)
-    
+
 def get_chat_summary(user_message, assistant_message):
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=GOOGLE_API_KEY, temperature=0.0)
@@ -190,6 +190,9 @@ def get_suggestions(user_question, retriever):
         print(f"Error generating suggestions: {e}")
         return None
 
+# --- MODIFICA N° 2: Aggiornamento della gestione delle fonti ---
+# Questa funzione è stata aggiornata per mostrare i metadati più dettagliati
+# come 'riga', 'paragrafo' o 'pagina'.
 def handle_user_input(user_question):
     if st.session_state.conversation:
         active_chat_id = st.session_state.user_data["active_chat_id"]
@@ -198,7 +201,7 @@ def handle_user_input(user_question):
             return
 
         response = st.session_state.conversation({'question': user_question, 'chat_history': st.session_state.get('chat_history_tuples', [])})
-        
+
         if not response['source_documents']:
             suggestions = get_suggestions(user_question, st.session_state.conversation.retriever)
             if suggestions:
@@ -209,30 +212,33 @@ def handle_user_input(user_question):
         else:
             answer = response['answer']
             st.session_state.chat_history_tuples.append((user_question, answer))
-            
+
             citations = []
-            seen_content = set()
             for doc in response['source_documents']:
-                if doc.page_content not in seen_content:
-                    meta = doc.metadata
-                    source = meta.get('source', 'N/D')
-                    
+                meta = doc.metadata
+                source = meta.get('source', 'N/D')
+                
+                # Creazione di una citazione dettagliata
+                details = []
+                if 'page' in meta: details.append(f"Pagina: {meta['page'] + 1}")
+                if 'paragraph' in meta: details.append(f"Paragrafo: {meta['paragraph']}")
+                if 'row' in meta: details.append(f"Riga: {meta['row']}")
+                # Aggiunta la nuova chiave 'line'
+                if 'line' in meta: details.append(f"Riga: {meta['line']}") 
+                if 'slide' in meta: details.append(f"Slide: {meta['slide']}")
+                
+                if details:
+                    citation_detail = f"**{source}** ({', '.join(details)})"
+                else:
                     citation_detail = f"**{source}**"
-                    if 'page' in meta: citation_detail += f" (Pagina: {meta['page'] + 1})"
-                    if 'row' in meta: citation_detail += f" (Riga: {meta['row']})"
-                    if 'paragraph' in meta: citation_detail += f" (Paragrafo: {meta['paragraph']})"
-                    if 'slide' in meta: citation_detail += f" (Slide: {meta['slide']})"
-                    
-                    citations.append({
-                        "source_info": citation_detail,
-                        "content": doc.page_content
-                    })
-                    seen_content.add(doc.page_content)
-        
+                
+                if citation_detail not in citations:
+                    citations.append(citation_detail)
+
         assistant_message = {"role": "assistant", "content": answer, "question": user_question, "citations": citations}
         st.session_state.user_data["chats"][active_chat_id]["messages"].append(assistant_message)
         st.session_state.messages = st.session_state.user_data["chats"][active_chat_id]["messages"]
-        
+
         active_chat = st.session_state.user_data["chats"][active_chat_id]
         if len(active_chat["messages"]) == 2:
             new_title = get_chat_summary(user_question, answer)
@@ -244,7 +250,7 @@ def get_documents_with_detailed_metadata(uploaded_files):
     for uploaded_file in uploaded_files:
         file_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name)
         with open(file_path, "wb") as f: f.write(uploaded_file.getbuffer())
-        
+
         file_extension = os.path.splitext(uploaded_file.name)[1].lower()
 
         if file_extension in ['.zip', '.7z']:
@@ -255,7 +261,7 @@ def get_documents_with_detailed_metadata(uploaded_files):
                     with zipfile.ZipFile(file_path, 'r') as zf: zf.extractall(extraction_path)
                 elif file_extension == '.7z':
                     with py7zr.SevenZipFile(file_path, mode='r') as z: z.extractall(path=extraction_path)
-                
+
                 for root, _, files in os.walk(extraction_path):
                     for file in files:
                         full_file_path = os.path.join(root, file)
@@ -266,6 +272,9 @@ def get_documents_with_detailed_metadata(uploaded_files):
             all_documents.extend(process_single_file(file_path, uploaded_file.name))
     return all_documents
 
+# --- MODIFICA N° 1: Estrazione granulare del testo ---
+# Questa funzione è stata riscritta per processare i file in modo più dettagliato,
+# aggiungendo metadati specifici per riga, paragrafo o pagina.
 def process_single_file(file_path_or_obj, file_name, archive_name=None):
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
@@ -274,40 +283,69 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
     
     temp_file_path = file_path_or_obj if isinstance(file_path_or_obj, str) else os.path.join(TEMP_FILES_PATH, file_name)
     if not isinstance(file_path_or_obj, str) and hasattr(file_path_or_obj, 'getbuffer'):
-         with open(temp_file_path, "wb") as f: f.write(file_path_or_obj.getbuffer())
+        with open(temp_file_path, "wb") as f: f.write(file_path_or_obj.getbuffer())
 
     try:
         if file_extension == '.pdf':
             loader = PyPDFLoader(temp_file_path)
             pages = loader.load_and_split()
-            for page in pages: page.metadata['source'] = source_display
+            for page in pages:
+                # Per i PDF, il riferimento più affidabile rimane la pagina
+                page.metadata['source'] = source_display
             documents.extend(pages)
+            
         elif file_extension == '.docx':
             doc = docx.Document(temp_file_path)
+            # Processa per paragrafo, che è il riferimento più vicino alla riga
             for i, p in enumerate(doc.paragraphs):
-                if p.text.strip(): documents.append(Document(page_content=p.text, metadata={'source': source_display, 'paragraph': i + 1}))
+                if p.text.strip():
+                    documents.append(Document(page_content=p.text, metadata={'source': source_display, 'paragraph': i + 1}))
+                    
         elif file_extension == '.pptx':
             prs = Presentation(temp_file_path)
             for i, slide in enumerate(prs.slides):
                 slide_text = ""
                 for shape in slide.shapes:
                     if hasattr(shape, "text"): slide_text += shape.text + "\n"
-                if slide_text.strip(): documents.append(Document(page_content=slide_text, metadata={'source': source_display, 'slide': i + 1}))
+                if slide_text.strip():
+                    documents.append(Document(page_content=slide_text, metadata={'source': source_display, 'slide': i + 1}))
+                    
         elif file_extension == '.csv':
-            df = pd.read_csv(temp_file_path)
-            for i, row in df.iterrows(): documents.append(Document(page_content=", ".join(f"{col}: {val}" for col, val in row.items()), metadata={'source': source_display, 'row': i + 1}))
+            # Per i CSV, la riga è il riferimento naturale
+            with open(temp_file_path, mode='r', encoding='utf-8') as csvfile:
+                reader = csv.reader(csvfile)
+                header = next(reader, None)
+                for i, row in enumerate(reader):
+                    row_content = ", ".join(f"{header[j]}: {val}" for j, val in enumerate(row) if header)
+                    documents.append(Document(page_content=row_content, metadata={'source': source_display, 'row': i + 2}))
+
         elif file_extension == '.xlsx':
             df = pd.read_excel(temp_file_path)
-            for i, row in df.iterrows(): documents.append(Document(page_content=", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val)), metadata={'source': source_display, 'row': i + 1}))
-        elif file_extension == '.aspx':
+            # Per i file Excel, la riga è il riferimento naturale
+            for i, row in df.iterrows():
+                row_content = ", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val))
+                documents.append(Document(page_content=row_content, metadata={'source': source_display, 'row': i + 2}))
+
+        # Aggiunta gestione per file di testo generici (txt, aspx, etc.)
+        elif file_extension in ['.aspx', '.txt', '.md']:
             with open(temp_file_path, "r", encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            soup = BeautifulSoup(content, 'html.parser')
-            text = soup.get_text(separator="\n", strip=True)
-            if text:
-                documents.append(Document(page_content=text, metadata={'source': source_display}))
-    except Exception as e: st.warning(f"Impossibile processare {file_name}: {e}")
+                # Processa il file riga per riga
+                for i, line_text in enumerate(f):
+                    if line_text.strip():
+                        # Per ASPX, puliamo prima l'HTML
+                        if file_extension == '.aspx':
+                            soup = BeautifulSoup(line_text, 'html.parser')
+                            clean_text = soup.get_text(strip=True)
+                        else:
+                            clean_text = line_text
+                        
+                        if clean_text:
+                            documents.append(Document(page_content=clean_text, metadata={'source': source_display, 'line': i + 1}))
+
+    except Exception as e:
+        st.warning(f"Impossibile processare {file_name}: {e}")
     return documents
+
 
 def get_text_chunks(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -443,7 +481,7 @@ def render_main_app():
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
         
-        allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'aspx']
+        allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'aspx', 'txt']
         uploaded_files = st.file_uploader("Carica file o archivi", accept_multiple_files=True, type=allowed_types)
 
         if st.button("Processa e Aggiungi"):
@@ -481,10 +519,8 @@ def render_main_app():
             if message["role"] == "assistant":
                 citations = message.get("citations", [])
                 if citations:
-                    with st.expander("Mostra fonti e citazioni"):
-                        for citation in citations:
-                            st.markdown(citation['source_info'])
-                            st.info(citation['content'])
+                    with st.expander("Mostra fonti consultate"):
+                        for citation in citations: st.markdown(f"- {citation}")
 
                 with st.popover("✏️ Fornisci un Feedback"):
                     with st.form(key=f"feedback_form_{i}"):
