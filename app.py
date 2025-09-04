@@ -190,9 +190,6 @@ def get_suggestions(user_question, retriever):
         print(f"Error generating suggestions: {e}")
         return None
 
-# --- MODIFICA N° 2: Aggiornamento della gestione delle fonti ---
-# Questa funzione è stata aggiornata per mostrare i metadati più dettagliati
-# come 'riga', 'paragrafo' o 'pagina'.
 def handle_user_input(user_question):
     if st.session_state.conversation:
         active_chat_id = st.session_state.user_data["active_chat_id"]
@@ -218,12 +215,10 @@ def handle_user_input(user_question):
                 meta = doc.metadata
                 source = meta.get('source', 'N/D')
                 
-                # Creazione di una citazione dettagliata
                 details = []
                 if 'page' in meta: details.append(f"Pagina: {meta['page'] + 1}")
                 if 'paragraph' in meta: details.append(f"Paragrafo: {meta['paragraph']}")
                 if 'row' in meta: details.append(f"Riga: {meta['row']}")
-                # Aggiunta la nuova chiave 'line'
                 if 'line' in meta: details.append(f"Riga: {meta['line']}") 
                 if 'slide' in meta: details.append(f"Slide: {meta['slide']}")
                 
@@ -245,36 +240,79 @@ def handle_user_input(user_question):
             if new_title:
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
 
+# --- NUOVA FUNZIONE HELPER ---
+# Questa funzione cerca ricorsivamente tutti i file con estensioni valide
+# all'interno di una data cartella.
+def find_supported_files_in_path(directory_path, allowed_extensions):
+    """
+    Cerca ricorsivamente in una directory tutti i file con le estensioni consentite.
+    """
+    found_files = []
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            if any(file.lower().endswith(ext) for ext in allowed_extensions):
+                found_files.append(os.path.join(root, file))
+    return found_files
+
+# --- FUNZIONE MODIFICATA ---
+# Questa funzione è stata riscritta per gestire l'upload di cartelle (tramite archivi .zip/.7z)
+# e processare ricorsivamente tutti i file supportati al loro interno.
 def get_documents_with_detailed_metadata(uploaded_files):
     all_documents = []
+    # Definiamo qui le estensioni per i file singoli, escludendo gli archivi
+    allowed_single_file_ext = ['.pdf', '.docx', '.csv', '.xlsx', '.pptx', '.aspx', '.txt', '.md']
+
     for uploaded_file in uploaded_files:
         file_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name)
-        with open(file_path, "wb") as f: f.write(uploaded_file.getbuffer())
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
         file_extension = os.path.splitext(uploaded_file.name)[1].lower()
 
+        # Caso 1: L'elemento caricato è un archivio (che rappresenta una cartella)
         if file_extension in ['.zip', '.7z']:
             extraction_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name + "_extracted")
-            if not os.path.exists(extraction_path): os.makedirs(extraction_path)
+            if not os.path.exists(extraction_path):
+                os.makedirs(extraction_path)
+            
             try:
+                # Estrazione dell'archivio
                 if file_extension == '.zip':
-                    with zipfile.ZipFile(file_path, 'r') as zf: zf.extractall(extraction_path)
+                    with zipfile.ZipFile(file_path, 'r') as zf:
+                        zf.extractall(extraction_path)
                 elif file_extension == '.7z':
-                    with py7zr.SevenZipFile(file_path, mode='r') as z: z.extractall(path=extraction_path)
+                    with py7zr.SevenZipFile(file_path, mode='r') as z:
+                        z.extractall(path=extraction_path)
 
-                for root, _, files in os.walk(extraction_path):
-                    for file in files:
-                        full_file_path = os.path.join(root, file)
-                        with open(full_file_path, "rb") as f_in:
-                            all_documents.extend(process_single_file(full_file_path, file, uploaded_file.name))
-            except Exception as e: st.error(f"Errore estrazione archivio {uploaded_file.name}: {e}")
-        else:
+                # Cerca ricorsivamente tutti i file supportati nella cartella estratta
+                files_to_process = find_supported_files_in_path(extraction_path, allowed_single_file_ext)
+                
+                if not files_to_process:
+                    st.warning(f"L'archivio '{uploaded_file.name}' è vuoto o non contiene file supportati.")
+                    continue
+
+                # Processa ogni file trovato
+                with st.spinner(f"Processando i file dall'archivio '{uploaded_file.name}'..."):
+                    for doc_path in files_to_process:
+                        # Il nome del file è l'ultima parte del percorso
+                        doc_name = os.path.basename(doc_path)
+                        # Passiamo il nome dell'archivio originale per una sorgente più chiara
+                        all_documents.extend(process_single_file(doc_path, doc_name, archive_name=uploaded_file.name))
+
+            except Exception as e:
+                st.error(f"Errore durante l'estrazione dell'archivio {uploaded_file.name}: {e}")
+
+        # Caso 2: L'elemento caricato è un singolo file supportato
+        elif file_extension in allowed_single_file_ext:
             all_documents.extend(process_single_file(file_path, uploaded_file.name))
+        
+        # Caso 3: Tipo di file non supportato (opzionale, ma buona pratica)
+        else:
+            st.warning(f"Il tipo di file '{uploaded_file.name}' non è supportato e sarà ignorato.")
+
     return all_documents
 
-# --- MODIFICA N° 1: Estrazione granulare del testo ---
-# Questa funzione è stata riscritta per processare i file in modo più dettagliato,
-# aggiungendo metadati specifici per riga, paragrafo o pagina.
+
 def process_single_file(file_path_or_obj, file_name, archive_name=None):
     documents = []
     source_display = f"{archive_name} -> {file_name}" if archive_name else file_name
@@ -290,13 +328,11 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
             loader = PyPDFLoader(temp_file_path)
             pages = loader.load_and_split()
             for page in pages:
-                # Per i PDF, il riferimento più affidabile rimane la pagina
                 page.metadata['source'] = source_display
             documents.extend(pages)
             
         elif file_extension == '.docx':
             doc = docx.Document(temp_file_path)
-            # Processa per paragrafo, che è il riferimento più vicino alla riga
             for i, p in enumerate(doc.paragraphs):
                 if p.text.strip():
                     documents.append(Document(page_content=p.text, metadata={'source': source_display, 'paragraph': i + 1}))
@@ -311,7 +347,6 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
                     documents.append(Document(page_content=slide_text, metadata={'source': source_display, 'slide': i + 1}))
                     
         elif file_extension == '.csv':
-            # Per i CSV, la riga è il riferimento naturale
             with open(temp_file_path, mode='r', encoding='utf-8') as csvfile:
                 reader = csv.reader(csvfile)
                 header = next(reader, None)
@@ -321,18 +356,14 @@ def process_single_file(file_path_or_obj, file_name, archive_name=None):
 
         elif file_extension == '.xlsx':
             df = pd.read_excel(temp_file_path)
-            # Per i file Excel, la riga è il riferimento naturale
             for i, row in df.iterrows():
                 row_content = ", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val))
                 documents.append(Document(page_content=row_content, metadata={'source': source_display, 'row': i + 2}))
 
-        # Aggiunta gestione per file di testo generici (txt, aspx, etc.)
         elif file_extension in ['.aspx', '.txt', '.md']:
             with open(temp_file_path, "r", encoding='utf-8', errors='ignore') as f:
-                # Processa il file riga per riga
                 for i, line_text in enumerate(f):
                     if line_text.strip():
-                        # Per ASPX, puliamo prima l'HTML
                         if file_extension == '.aspx':
                             soup = BeautifulSoup(line_text, 'html.parser')
                             clean_text = soup.get_text(strip=True)
@@ -482,7 +513,7 @@ def render_main_app():
         st.header("Base di Conoscenza Condivisa")
         
         allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'aspx', 'txt']
-        uploaded_files = st.file_uploader("Carica file o archivi", accept_multiple_files=True, type=allowed_types)
+        uploaded_files = st.file_uploader("Carica file o archivi (.zip, .7z) per le cartelle", accept_multiple_files=True, type=allowed_types)
 
         if st.button("Processa e Aggiungi"):
             if uploaded_files:
@@ -495,7 +526,7 @@ def render_main_app():
                             st.session_state.conversation = get_conversational_chain(vs)
                             st.success("Base di conoscenza aggiornata!")
                             st.rerun()
-                    else: st.warning("Nessun documento valido trovato.")
+                    else: st.warning("Nessun documento valido trovato nei file caricati.")
             else: st.warning("Per favore, carica almeno un file.")
         
         st.markdown("---")
