@@ -240,13 +240,7 @@ def handle_user_input(user_question):
             if new_title:
                 st.session_state.user_data["chats"][active_chat_id]["name"] = new_title
 
-# --- NUOVA FUNZIONE HELPER ---
-# Questa funzione cerca ricorsivamente tutti i file con estensioni valide
-# all'interno di una data cartella.
 def find_supported_files_in_path(directory_path, allowed_extensions):
-    """
-    Cerca ricorsivamente in una directory tutti i file con le estensioni consentite.
-    """
     found_files = []
     for root, _, files in os.walk(directory_path):
         for file in files:
@@ -254,12 +248,8 @@ def find_supported_files_in_path(directory_path, allowed_extensions):
                 found_files.append(os.path.join(root, file))
     return found_files
 
-# --- FUNZIONE MODIFICATA ---
-# Questa funzione è stata riscritta per gestire l'upload di cartelle (tramite archivi .zip/.7z)
-# e processare ricorsivamente tutti i file supportati al loro interno.
 def get_documents_with_detailed_metadata(uploaded_files):
     all_documents = []
-    # Definiamo qui le estensioni per i file singoli, escludendo gli archivi
     allowed_single_file_ext = ['.pdf', '.docx', '.csv', '.xlsx', '.pptx', '.aspx', '.txt', '.md']
 
     for uploaded_file in uploaded_files:
@@ -269,14 +259,12 @@ def get_documents_with_detailed_metadata(uploaded_files):
 
         file_extension = os.path.splitext(uploaded_file.name)[1].lower()
 
-        # Caso 1: L'elemento caricato è un archivio (che rappresenta una cartella)
         if file_extension in ['.zip', '.7z']:
             extraction_path = os.path.join(TEMP_FILES_PATH, uploaded_file.name + "_extracted")
             if not os.path.exists(extraction_path):
                 os.makedirs(extraction_path)
             
             try:
-                # Estrazione dell'archivio
                 if file_extension == '.zip':
                     with zipfile.ZipFile(file_path, 'r') as zf:
                         zf.extractall(extraction_path)
@@ -284,29 +272,23 @@ def get_documents_with_detailed_metadata(uploaded_files):
                     with py7zr.SevenZipFile(file_path, mode='r') as z:
                         z.extractall(path=extraction_path)
 
-                # Cerca ricorsivamente tutti i file supportati nella cartella estratta
                 files_to_process = find_supported_files_in_path(extraction_path, allowed_single_file_ext)
                 
                 if not files_to_process:
                     st.warning(f"L'archivio '{uploaded_file.name}' è vuoto o non contiene file supportati.")
                     continue
 
-                # Processa ogni file trovato
                 with st.spinner(f"Processando i file dall'archivio '{uploaded_file.name}'..."):
                     for doc_path in files_to_process:
-                        # Il nome del file è l'ultima parte del percorso
                         doc_name = os.path.basename(doc_path)
-                        # Passiamo il nome dell'archivio originale per una sorgente più chiara
                         all_documents.extend(process_single_file(doc_path, doc_name, archive_name=uploaded_file.name))
 
             except Exception as e:
                 st.error(f"Errore durante l'estrazione dell'archivio {uploaded_file.name}: {e}")
 
-        # Caso 2: L'elemento caricato è un singolo file supportato
         elif file_extension in allowed_single_file_ext:
             all_documents.extend(process_single_file(file_path, uploaded_file.name))
         
-        # Caso 3: Tipo di file non supportato (opzionale, ma buona pratica)
         else:
             st.warning(f"Il tipo di file '{uploaded_file.name}' non è supportato e sarà ignorato.")
 
@@ -476,6 +458,24 @@ def register_page():
                 save_users(users)
                 st.success("Registrazione completata! Ora puoi effettuare il login.")
 
+def get_document_sources_from_vector_store():
+    index_path = os.path.join(VECTOR_STORE_PATH, "index.faiss")
+    if not os.path.exists(index_path):
+        return []
+
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
+        vector_store = FAISS.load_local(VECTOR_STORE_PATH, embeddings, allow_dangerous_deserialization=True)
+        
+        all_metadata = [doc.metadata for doc in vector_store.docstore._dict.values()]
+        sources = [meta.get('source', 'Sorgente Sconosciuta') for meta in all_metadata]
+        
+        unique_sources = sorted(list(set(sources)))
+        return unique_sources
+    except Exception as e:
+        st.warning(f"Impossibile leggere le fonti dal vector store: {e}")
+        return []
+
 def render_main_app():
     st.title("💡 Consip Advisor")
     
@@ -511,6 +511,13 @@ def render_main_app():
         
         st.markdown("---")
         st.header("Base di Conoscenza Condivisa")
+        with st.expander("Documenti Caricati"):
+            document_sources = get_document_sources_from_vector_store()
+            if document_sources:
+                for source in document_sources:
+                    st.markdown(f"• `{source}`")
+            else:
+                st.info("Nessun documento è stato ancora processato.")
         
         allowed_types = ['pdf', 'docx', 'csv', 'xlsx', 'zip', '7z', 'pptx', 'aspx', 'txt']
         uploaded_files = st.file_uploader("Carica file o archivi (.zip, .7z) per le cartelle", accept_multiple_files=True, type=allowed_types)
